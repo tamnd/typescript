@@ -135,6 +135,14 @@ func ForEachChild(node *Node, visit func(*Node) bool) bool {
 	return node.ForEachChild(ast.Visitor(visit))
 }
 
+// NodeText returns the exact source text of a node's own token range, excluding
+// leading trivia. It is the primitive a code generator reads an identifier name,
+// a numeric or string literal, or a binary operator token with, straight from
+// the checked source, so the emitted Go carries the value the source wrote.
+func NodeText(node *Node) string {
+	return scanner.GetTextOfNode(node)
+}
+
 // LiteralValue returns the value of a literal type: a string for a string
 // literal, a jsnum.Number for a number literal, a bool for a boolean literal, a
 // PseudoBigInt for a bigint literal. It returns nil for a non-literal type.
