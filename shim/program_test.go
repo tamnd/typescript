@@ -63,6 +63,57 @@ func TestCompilesRealTypeScript(t *testing.T) {
 	}
 }
 
+// TestNodeText proves NodeText returns a node's own source text without leading
+// trivia, for an identifier, a numeric literal, and a binary operator token, the
+// three things a code generator reads straight from the checked source.
+func TestNodeText(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": "const total = width * 2;\n",
+	}, shim.Options{})
+	defer p.Close()
+
+	file := findFile(t, p, "/src/main.ts")
+
+	id := firstNamed(file.AsNode(), "width")
+	if id == nil {
+		t.Fatal("identifier width not found")
+	}
+	if got := shim.NodeText(id); got != "width" {
+		t.Errorf("NodeText(identifier) = %q, want %q", got, "width")
+	}
+
+	// Walk to the binary expression and read its operator token and right operand.
+	var bin *shim.Node
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		if n.Kind == ast.KindBinaryExpression {
+			bin = n
+			return true
+		}
+		shim.ForEachChild(n, walk)
+		return bin != nil
+	}
+	walk(file.AsNode())
+	if bin == nil {
+		t.Fatal("binary expression not found")
+	}
+
+	var kids []*shim.Node
+	shim.ForEachChild(bin, func(n *shim.Node) bool {
+		kids = append(kids, n)
+		return false
+	})
+	if len(kids) != 3 {
+		t.Fatalf("binary expression has %d children, want 3 (left, operator, right)", len(kids))
+	}
+	if got := shim.NodeText(kids[1]); got != "*" {
+		t.Errorf("NodeText(operator) = %q, want %q", got, "*")
+	}
+	if got := shim.NodeText(kids[2]); got != "2" {
+		t.Errorf("NodeText(numeric literal) = %q, want %q", got, "2")
+	}
+}
+
 // TestReadsObjectProperties proves the shim exposes a type's members with their
 // resolved types, the query type lowering is built on.
 func TestReadsObjectProperties(t *testing.T) {
