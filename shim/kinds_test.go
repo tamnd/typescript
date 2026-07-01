@@ -1,0 +1,97 @@
+package shim_test
+
+import (
+	"testing"
+
+	"github.com/microsoft/typescript-go/shim"
+)
+
+// TestKindConstantsMatch proves the re-exported kind constants name the same
+// nodes the checker produces: the source file walks to a function declaration
+// and an identifier that carry the expected kinds.
+func TestKindConstantsMatch(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": "function area(r: number) { return r; }\n",
+	}, shim.Options{})
+	defer p.Close()
+
+	var sawFunc, sawIdent bool
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		switch n.Kind {
+		case shim.KindFunctionDeclaration:
+			sawFunc = true
+		case shim.KindIdentifier:
+			sawIdent = true
+		}
+		shim.ForEachChild(n, walk)
+		return false
+	}
+	for _, f := range p.SourceFiles() {
+		if f.FileName() == "/src/main.ts" {
+			walk(f.AsNode())
+		}
+	}
+	if !sawFunc {
+		t.Error("did not find a function declaration by its kind constant")
+	}
+	if !sawIdent {
+		t.Error("did not find an identifier by its kind constant")
+	}
+}
+
+// TestImportSpecifiers proves the file's import edges come back as written.
+func TestImportSpecifiers(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts":  "import { x } from \"./other\";\nexport const y = x;\n",
+		"/src/other.ts": "export const x = 1;\n",
+	}, shim.Options{RootFiles: []string{"/src/main.ts"}})
+	defer p.Close()
+
+	var main *shim.SourceFile
+	for _, f := range p.SourceFiles() {
+		if f.FileName() == "/src/main.ts" {
+			main = f
+		}
+	}
+	if main == nil {
+		t.Fatal("main file not found")
+	}
+	specs := shim.ImportSpecifiers(main)
+	if len(specs) != 1 || specs[0] != "./other" {
+		t.Errorf("import specifiers = %v, want [./other]", specs)
+	}
+	if resolved, ok := p.ResolvedModule(main, "./other"); !ok || resolved != "/src/other.ts" {
+		t.Errorf("resolved ./other to %q ok=%v, want /src/other.ts true", resolved, ok)
+	}
+}
+
+// TestFileNameOfNode proves a node deep in the tree reports its own file.
+func TestFileNameOfNode(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": "const n = 1;\n",
+	}, shim.Options{})
+	defer p.Close()
+
+	var ident *shim.Node
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		if ident == nil && n.Kind == shim.KindIdentifier {
+			ident = n
+			return true
+		}
+		shim.ForEachChild(n, walk)
+		return ident != nil
+	}
+	for _, f := range p.SourceFiles() {
+		if f.FileName() == "/src/main.ts" {
+			walk(f.AsNode())
+		}
+	}
+	if ident == nil {
+		t.Fatal("no identifier found")
+	}
+	if got := shim.FileName(ident); got != "/src/main.ts" {
+		t.Errorf("FileName(ident) = %q, want /src/main.ts", got)
+	}
+}

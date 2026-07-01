@@ -106,13 +106,19 @@ func (p *Program) Diagnostics(file *SourceFile) []*Diagnostic {
 
 // ResolvedModule resolves an import specifier as written in the given file and
 // returns the absolute path of the file it resolves to, or ok=false when the
-// import does not resolve.
+// import does not resolve. It resolves against the file's own import node so the
+// module mode matches the one the checker used, which the cache is keyed on.
 func (p *Program) ResolvedModule(from *SourceFile, specifier string) (path string, ok bool) {
-	rm := p.inner.GetResolvedModule(from, specifier, ResolutionModeNone)
-	if !rm.IsResolved() {
-		return "", false
+	for _, lit := range from.Imports() {
+		if lit.Text() != specifier {
+			continue
+		}
+		rm := p.inner.GetResolvedModuleFromModuleSpecifier(from, lit)
+		if rm.IsResolved() {
+			return rm.ResolvedFileName, true
+		}
 	}
-	return rm.ResolvedFileName, true
+	return "", false
 }
 
 // LineAndCharacter converts a byte position in a file to a zero-based line and
