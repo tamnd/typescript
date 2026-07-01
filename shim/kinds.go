@@ -58,6 +58,17 @@ const (
 	KindAwaitExpression          = ast.KindAwaitExpression
 	KindYieldExpression          = ast.KindYieldExpression
 	KindSpreadElement            = ast.KindSpreadElement
+	KindParenthesizedExpression  = ast.KindParenthesizedExpression
+
+	// Literals and keyword-valued expressions, the leaves a code generator reads
+	// a constant from.
+	KindNumericLiteral                = ast.KindNumericLiteral
+	KindStringLiteral                 = ast.KindStringLiteral
+	KindBigIntLiteral                 = ast.KindBigIntLiteral
+	KindNoSubstitutionTemplateLiteral = ast.KindNoSubstitutionTemplateLiteral
+	KindTrueKeyword                   = ast.KindTrueKeyword
+	KindFalseKeyword                  = ast.KindFalseKeyword
+	KindNullKeyword                   = ast.KindNullKeyword
 )
 
 // FileName returns the path of the source file a node belongs to, so a caller
