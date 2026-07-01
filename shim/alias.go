@@ -87,6 +87,8 @@ const (
 	SymbolFlagsTypeAlias  = ast.SymbolFlagsTypeAlias
 	SymbolFlagsEnum       = ast.SymbolFlagsEnum
 	SymbolFlagsEnumMember = ast.SymbolFlagsEnumMember
+	SymbolFlagsAlias      = ast.SymbolFlagsAlias
+	SymbolFlagsNamespace  = ast.SymbolFlagsNamespace
 )
 
 // SignatureKind values.
