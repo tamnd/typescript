@@ -95,3 +95,43 @@ func TestFileNameOfNode(t *testing.T) {
 		t.Errorf("FileName(ident) = %q, want /src/main.ts", got)
 	}
 }
+
+// TestClassKeywordKinds proves the this and super keyword kinds name the nodes a
+// class body carries: this inside a method and super inside a subclass method.
+func TestClassKeywordKinds(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": `class Base {
+  x: number = 0;
+  get(): number { return this.x; }
+}
+class Sub extends Base {
+  get(): number { return super.get() + 1; }
+}
+`,
+	}, shim.Options{})
+	defer p.Close()
+
+	var sawThis, sawSuper bool
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		switch n.Kind {
+		case shim.KindThisKeyword:
+			sawThis = true
+		case shim.KindSuperKeyword:
+			sawSuper = true
+		}
+		shim.ForEachChild(n, walk)
+		return false
+	}
+	for _, f := range p.SourceFiles() {
+		if f.FileName() == "/src/main.ts" {
+			walk(f.AsNode())
+		}
+	}
+	if !sawThis {
+		t.Error("did not find the this keyword by its kind constant")
+	}
+	if !sawSuper {
+		t.Error("did not find the super keyword by its kind constant")
+	}
+}

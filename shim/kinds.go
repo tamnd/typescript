@@ -69,6 +69,11 @@ const (
 	KindTrueKeyword                   = ast.KindTrueKeyword
 	KindFalseKeyword                  = ast.KindFalseKeyword
 	KindNullKeyword                   = ast.KindNullKeyword
+
+	// Class-body keywords: the receiver reference inside a method and the parent
+	// reference inside a subclass.
+	KindThisKeyword  = ast.KindThisKeyword
+	KindSuperKeyword = ast.KindSuperKeyword
 )
 
 // FileName returns the path of the source file a node belongs to, so a caller
