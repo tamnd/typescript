@@ -60,6 +60,12 @@ const (
 	KindSpreadElement            = ast.KindSpreadElement
 	KindParenthesizedExpression  = ast.KindParenthesizedExpression
 
+	// Type-cast expressions the emitter erases to their inner value: the `as`
+	// form and the angle-bracket assertion. Both carry a type the checker used to
+	// widen or narrow the expression, and both leave the runtime value untouched.
+	KindAsExpression            = ast.KindAsExpression
+	KindTypeAssertionExpression = ast.KindTypeAssertionExpression
+
 	// Literals and keyword-valued expressions, the leaves a code generator reads
 	// a constant from.
 	KindNumericLiteral                = ast.KindNumericLiteral

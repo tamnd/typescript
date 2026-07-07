@@ -40,6 +40,39 @@ func TestKindConstantsMatch(t *testing.T) {
 	}
 }
 
+// TestCastExpressionKinds proves the as-cast and angle-bracket assertion kinds
+// name the nodes the parser produces for each cast form.
+func TestCastExpressionKinds(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": "const a = 1 as number;\nconst b = <number>2;\n",
+	}, shim.Options{})
+	defer p.Close()
+
+	var sawAs, sawAssertion bool
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		switch n.Kind {
+		case shim.KindAsExpression:
+			sawAs = true
+		case shim.KindTypeAssertionExpression:
+			sawAssertion = true
+		}
+		shim.ForEachChild(n, walk)
+		return false
+	}
+	for _, f := range p.SourceFiles() {
+		if f.FileName() == "/src/main.ts" {
+			walk(f.AsNode())
+		}
+	}
+	if !sawAs {
+		t.Error("did not find an as-cast by its kind constant")
+	}
+	if !sawAssertion {
+		t.Error("did not find an angle-bracket assertion by its kind constant")
+	}
+}
+
 // TestImportSpecifiers proves the file's import edges come back as written.
 func TestImportSpecifiers(t *testing.T) {
 	p := shim.Compile(map[string]string{
