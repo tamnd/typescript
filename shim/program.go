@@ -2,6 +2,8 @@ package shim
 
 import (
 	"context"
+	"strings"
+	"sync"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/bundled"
@@ -65,6 +67,11 @@ func Compile(files map[string]string, opts Options) *Program {
 		co.Strict = core.TSTrue
 	}
 
+	libPath := bundled.LibPath()
+	host := &cachingHost{
+		CompilerHost: compiler.NewCompilerHost("/", fs, libPath, nil, nil),
+		libPath:      libPath,
+	}
 	inner := compiler.NewProgram(compiler.ProgramOptions{
 		Config: &tsoptions.ParsedCommandLine{
 			ParsedConfig: &core.ParsedOptions{
@@ -72,11 +79,47 @@ func Compile(files map[string]string, opts Options) *Program {
 				CompilerOptions: co,
 			},
 		},
-		Host: compiler.NewCompilerHost("/", fs, bundled.LibPath(), nil, nil),
+		Host: host,
 	})
 
 	chk, release := inner.GetTypeChecker(context.Background())
 	return &Program{inner: inner, checker: chk, release: release}
+}
+
+// libFileCache holds parsed standard-library source files so repeated Compile
+// calls in one process reparse the multi-megabyte lib.d.ts set only once. The
+// lib files are byte-for-byte identical across every compile, and a parsed
+// (then bound) source file is safe to share across programs the same way the
+// language server's document registry shares it: binding writes symbols onto
+// the tree once and is idempotent, while each program's checker keeps its own
+// type links off to the side. Input files are never cached here because their
+// text changes from call to call.
+var libFileCache sync.Map // ast.SourceFileParseOptions -> *ast.SourceFile
+
+// cachingHost wraps a compiler host and serves parsed standard-library files
+// from libFileCache. Every non-lib file falls through to the wrapped host, so a
+// caller's own inputs are always parsed fresh.
+type cachingHost struct {
+	compiler.CompilerHost
+	libPath string
+}
+
+// GetSourceFile returns a cached parse for a lib file and parses everything else
+// through the wrapped host. The cache key is the full parse options struct, so a
+// change in how a file is parsed (path, module indicator) is a distinct entry.
+func (h *cachingHost) GetSourceFile(opts ast.SourceFileParseOptions) *ast.SourceFile {
+	if !strings.HasPrefix(opts.FileName, h.libPath) {
+		return h.CompilerHost.GetSourceFile(opts)
+	}
+	if cached, ok := libFileCache.Load(opts); ok {
+		return cached.(*ast.SourceFile)
+	}
+	sf := h.CompilerHost.GetSourceFile(opts)
+	if sf == nil {
+		return nil
+	}
+	actual, _ := libFileCache.LoadOrStore(opts, sf)
+	return actual.(*ast.SourceFile)
 }
 
 // Close returns the checker to the program's pool. After Close the Program's
