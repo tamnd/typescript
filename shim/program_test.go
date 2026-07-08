@@ -114,6 +114,83 @@ func TestNodeText(t *testing.T) {
 	}
 }
 
+// forStatement finds the first for statement in a tree, which the ForClauses
+// tests point at.
+func forStatement(root *shim.Node) *shim.Node {
+	var found *shim.Node
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		if found != nil {
+			return true
+		}
+		if n.Kind == ast.KindForStatement {
+			found = n
+			return true
+		}
+		shim.ForEachChild(n, walk)
+		return found != nil
+	}
+	walk(root)
+	return found
+}
+
+// TestForClausesReadsEveryPart proves ForClauses returns each of a full for
+// statement's four parts by role, so a caller reads the initializer, condition,
+// incrementor, and body straight from the node.
+func TestForClausesReadsEveryPart(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": "for (let i = 0; i < 3; i++) { console.log(i); }\n",
+	}, shim.Options{})
+	defer p.Close()
+
+	f := forStatement(findFile(t, p, "/src/main.ts").AsNode())
+	if f == nil {
+		t.Fatal("for statement not found")
+	}
+	init, cond, incr, body := shim.ForClauses(f)
+	if init == nil || cond == nil || incr == nil || body == nil {
+		t.Fatalf("a full for lost a clause: init=%v cond=%v incr=%v body=%v", init != nil, cond != nil, incr != nil, body != nil)
+	}
+	if got := shim.NodeText(cond); got != "i < 3" {
+		t.Errorf("condition text = %q, want %q", got, "i < 3")
+	}
+	if got := shim.NodeText(incr); got != "i++" {
+		t.Errorf("incrementor text = %q, want %q", got, "i++")
+	}
+}
+
+// TestForClausesReportsOmittedClauses proves ForClauses returns nil for a clause
+// the source omits, the case walking children cannot tell apart because
+// ForEachChild skips the omission. Here for(;i<3;) drops the initializer and the
+// incrementor but keeps the condition.
+func TestForClausesReportsOmittedClauses(t *testing.T) {
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": "let i = 0; for (; i < 3; ) { i++; }\n",
+	}, shim.Options{})
+	defer p.Close()
+
+	f := forStatement(findFile(t, p, "/src/main.ts").AsNode())
+	if f == nil {
+		t.Fatal("for statement not found")
+	}
+	init, cond, incr, body := shim.ForClauses(f)
+	if init != nil {
+		t.Errorf("omitted initializer read as %q, want nil", shim.NodeText(init))
+	}
+	if incr != nil {
+		t.Errorf("omitted incrementor read as %q, want nil", shim.NodeText(incr))
+	}
+	if cond == nil {
+		t.Fatal("condition was dropped")
+	}
+	if got := shim.NodeText(cond); got != "i < 3" {
+		t.Errorf("condition text = %q, want %q", got, "i < 3")
+	}
+	if body == nil {
+		t.Error("body was dropped")
+	}
+}
+
 // TestReadsObjectProperties proves the shim exposes a type's members with their
 // resolved types, the query type lowering is built on.
 func TestReadsObjectProperties(t *testing.T) {
