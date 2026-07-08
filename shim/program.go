@@ -178,6 +178,17 @@ func ForEachChild(node *Node, visit func(*Node) bool) bool {
 	return node.ForEachChild(ast.Visitor(visit))
 }
 
+// ForClauses returns the four parts of a for statement by role: the initializer,
+// the condition, the incrementor, and the body. Any of the first three is nil
+// when the source omits that clause, as in for(;;) or for(let i=0;;i++). A
+// caller reads roles this way rather than by walking children, because
+// ForEachChild skips an omitted clause and so collapses the positions the roles
+// would otherwise sit at. The node must be a for statement.
+func ForClauses(node *Node) (init, cond, incr, body *Node) {
+	f := node.AsForStatement()
+	return f.Initializer, f.Condition, f.Incrementor, f.Statement
+}
+
 // NodeText returns the exact source text of a node's own token range, excluding
 // leading trivia. It is the primitive a code generator reads an identifier name,
 // a numeric or string literal, or a binary operator token with, straight from
