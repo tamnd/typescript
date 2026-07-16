@@ -209,6 +209,52 @@ func IsTupleType(t *Type) bool {
 	return isTupleType(t)
 }
 
+// TupleElementExport carries one positional element of a tuple type across the
+// shim: its element type, whether the position is optional or the rest tail, and
+// its label when the source named the element.
+type TupleElementExport struct {
+	Type     *Type
+	Optional bool
+	Rest     bool
+	Label    string
+}
+
+// TupleElementsOf returns the positional elements of a tuple type, and false for
+// a non-tuple. The element types come from the tuple reference's type arguments;
+// the optional and rest flags and the label come from the tuple target. A rest
+// or variadic position reports Rest, so the caller reads the last element as the
+// gathered tail. A named element reports its label; an unlabeled one an empty
+// string.
+func (c *Checker) TupleElementsOf(t *Type) ([]TupleElementExport, bool) {
+	if t == nil || !isTupleType(t) {
+		return nil, false
+	}
+	target := t.TargetTupleType()
+	if target == nil {
+		return nil, false
+	}
+	infos := target.ElementInfos()
+	args := c.getTypeArguments(t)
+	if len(args) != len(infos) {
+		return nil, false
+	}
+	out := make([]TupleElementExport, len(infos))
+	for i, info := range infos {
+		flags := info.TupleElementFlags()
+		label := ""
+		if decl := info.LabeledDeclaration(); decl != nil {
+			label = decl.Name().Text()
+		}
+		out[i] = TupleElementExport{
+			Type:     args[i],
+			Optional: flags&ElementFlagsOptional != 0,
+			Rest:     flags&(ElementFlagsRest|ElementFlagsVariadic) != 0,
+			Label:    label,
+		}
+	}
+	return out, true
+}
+
 func (c *Checker) IsArrayType(t *Type) bool {
 	return c.isArrayType(t)
 }

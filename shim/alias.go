@@ -30,6 +30,9 @@ type (
 	Diagnostic = ast.Diagnostic
 	// ResolvedModule is the result of resolving one import specifier.
 	ResolvedModule = module.ResolvedModule
+	// TupleElementExport is one positional element of a tuple type: its element
+	// type, whether the position is optional or the rest tail, and its label.
+	TupleElementExport = checker.TupleElementExport
 
 	// TypeFlags classifies a type: number, string, object, union, and so on.
 	TypeFlags = checker.TypeFlags
