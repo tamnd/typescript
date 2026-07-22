@@ -173,6 +173,16 @@ func (c *Checker) GetTypeOfSymbol(symbol *ast.Symbol) *Type {
 	return c.getTypeOfSymbol(symbol)
 }
 
+// GetWriteTypeOfSymbol returns the type a write to the symbol accepts. For an
+// ordinary property this is its declared type, the same as GetTypeOfSymbol, but
+// for a set accessor whose parameter type differs from the paired get accessor's
+// return type it is the set accessor's parameter type. An out-of-module lowering
+// reads this to model a divergent accessor: the field a write must satisfy is the
+// write type, while a read yields the narrower get type.
+func (c *Checker) GetWriteTypeOfSymbol(symbol *ast.Symbol) *Type {
+	return c.getWriteTypeOfSymbol(symbol)
+}
+
 func (c *Checker) GetConstraintOfTypeParameter(typeParameter *Type) *Type {
 	return c.getConstraintOfTypeParameter(typeParameter)
 }
