@@ -81,7 +81,14 @@ func Compile(files map[string]string, opts Options) *Program {
 		Module:           core.ModuleKindESNext,
 		ModuleResolution: core.ModuleResolutionKindBundler,
 	}
-	if !opts.Loose {
+	// Strict is set to a decided value either way. Leaving it unknown is not the same
+	// as loose: the checker resolves an unset strict sub-flag with `Strict != TSFalse`,
+	// so an unknown Strict reads as on and strictNullChecks stays enabled. Setting it
+	// false explicitly is what turns the strict family off, so a loose caller gets the
+	// non-strict checking it asked for, undefined and null widening to any among it.
+	if opts.Loose {
+		co.Strict = core.TSFalse
+	} else {
 		co.Strict = core.TSTrue
 	}
 	if opts.NoImplicitAny != nil {
