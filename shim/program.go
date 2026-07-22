@@ -27,6 +27,24 @@ type Options struct {
 	// default because strict is what a compiler front end wants; the field only
 	// exists so a caller can reproduce a non-strict project when it must.
 	Loose bool
+	// Target names the emit target the checker resolves against, for example
+	// "es2015" or "esnext". An empty string keeps the default esnext. It matters
+	// for diagnostics that depend on downleveling, such as the helper a
+	// pre-es2017 async function needs. Values follow the tsconfig target names.
+	Target string
+	// NoImplicitAny, when non-nil, sets noImplicitAny independently of Loose, so a
+	// caller can reproduce a non-strict project that still asked for the flag. A
+	// nil pointer leaves it to Loose: strict implies it, loose leaves it off.
+	NoImplicitAny *bool
+	// AllowUnreachableCode, when non-nil, sets allowUnreachableCode. A nil pointer
+	// keeps the default, under which unreachable code is reported. Setting it
+	// false is what makes the checker report unreachable code as an error rather
+	// than fold it silently.
+	AllowUnreachableCode *bool
+	// ImportHelpers turns on importHelpers, under which the checker expects a
+	// tslib helper module for downlevel emit and reports its absence. It reproduces
+	// a project built with the helper library.
+	ImportHelpers bool
 }
 
 // Program is a compiled, type-checked program with a checker held ready for
@@ -59,12 +77,21 @@ func Compile(files map[string]string, opts Options) *Program {
 	}
 
 	co := &core.CompilerOptions{
-		Target:           core.ScriptTargetESNext,
+		Target:           targetFromName(opts.Target),
 		Module:           core.ModuleKindESNext,
 		ModuleResolution: core.ModuleResolutionKindBundler,
 	}
 	if !opts.Loose {
 		co.Strict = core.TSTrue
+	}
+	if opts.NoImplicitAny != nil {
+		co.NoImplicitAny = triFromBool(*opts.NoImplicitAny)
+	}
+	if opts.AllowUnreachableCode != nil {
+		co.AllowUnreachableCode = triFromBool(*opts.AllowUnreachableCode)
+	}
+	if opts.ImportHelpers {
+		co.ImportHelpers = core.TSTrue
 	}
 
 	libPath := bundled.LibPath()
@@ -84,6 +111,48 @@ func Compile(files map[string]string, opts Options) *Program {
 
 	chk, release := inner.GetTypeChecker(context.Background())
 	return &Program{inner: inner, checker: chk, release: release}
+}
+
+// triFromBool maps a Go bool onto the checker's tristate, so a caller that knows
+// a setting is on or off records it as a decided value rather than leaving it
+// unknown, which the checker would resolve from other options.
+func triFromBool(b bool) core.Tristate {
+	if b {
+		return core.TSTrue
+	}
+	return core.TSFalse
+}
+
+// targetFromName maps a tsconfig target name onto the script-target enum, so a
+// caller can name the emit target the way a tsconfig does. An empty or
+// unrecognized name keeps the esnext default, matching the zero value's meaning.
+func targetFromName(name string) core.ScriptTarget {
+	switch strings.ToLower(name) {
+	case "es6", "es2015":
+		return core.ScriptTargetES2015
+	case "es2016":
+		return core.ScriptTargetES2016
+	case "es2017":
+		return core.ScriptTargetES2017
+	case "es2018":
+		return core.ScriptTargetES2018
+	case "es2019":
+		return core.ScriptTargetES2019
+	case "es2020":
+		return core.ScriptTargetES2020
+	case "es2021":
+		return core.ScriptTargetES2021
+	case "es2022":
+		return core.ScriptTargetES2022
+	case "es2023":
+		return core.ScriptTargetES2023
+	case "es2024":
+		return core.ScriptTargetES2024
+	case "es2025":
+		return core.ScriptTargetES2025
+	default:
+		return core.ScriptTargetESNext
+	}
 }
 
 // libFileCache holds parsed standard-library source files so repeated Compile
