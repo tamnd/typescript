@@ -70,6 +70,10 @@ func (c *Checker) GetArgumentsSymbol() *ast.Symbol {
 	return c.argumentsSymbol
 }
 
+func (c *Checker) GetUnknownSignature() *Signature {
+	return c.unknownSignature
+}
+
 func (c *Checker) GetUnionType(types []*Type) *Type {
 	return c.getUnionType(types)
 }
@@ -404,4 +408,8 @@ func (c *Checker) RemoveMissingOrUndefinedType(t *Type) *Type {
 
 func (c *Checker) GetWidenedType(t *Type) *Type {
 	return c.getWidenedType(t)
+}
+
+func (c *Checker) CompareSymbols(s1, s2 *ast.Symbol) int {
+	return c.compareSymbols(s1, s2)
 }
