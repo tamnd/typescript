@@ -1,0 +1,117 @@
+name: Sync upstream
+
+# Keep this fork current with microsoft/typescript-go.
+# Runs daily, merges upstream main onto our line, gates on the shim building
+# and its tests, then opens or refreshes one rolling pull request.
+# It never pushes to main directly, a person merges the PR.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  UPSTREAM: https://github.com/microsoft/typescript-go.git
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream main
+
+      - name: Measure divergence
+        id: gap
+        run: |
+          behind=$(git rev-list --count origin/main..upstream/main)
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "Fork is $behind commits behind upstream/main."
+
+      - name: Prepare merge branch
+        if: steps.gap.outputs.behind != '0'
+        id: merge
+        run: |
+          git checkout -B "$SYNC_BRANCH" origin/main
+          if git merge --no-edit upstream/main; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open an issue when the merge conflicts
+        if: steps.gap.outputs.behind != '0' && steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="Upstream sync needs a manual merge"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number')
+          body="The daily upstream sync could not merge microsoft/typescript-go main cleanly. Resolve it by hand, then push $SYNC_BRANCH."
+          if [ -z "$existing" ]; then
+            gh issue create --title "$title" --body "$body"
+          else
+            gh issue comment "$existing" --body "$body (upstream is ${{ steps.gap.outputs.behind }} commits ahead as of this run)"
+          fi
+          exit 1
+
+      - name: Set up Go
+        if: steps.gap.outputs.behind != '0' && steps.merge.outputs.conflict == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Gate on the shim building and passing
+        if: steps.gap.outputs.behind != '0' && steps.merge.outputs.conflict == 'false'
+        run: |
+          go build ./shim/... ./internal/checker/...
+          go test ./shim/...
+
+      - name: Push the merge branch
+        if: steps.gap.outputs.behind != '0' && steps.merge.outputs.conflict == 'false'
+        run: git push --force-with-lease origin "$SYNC_BRANCH"
+
+      - name: Open or refresh the pull request
+        if: steps.gap.outputs.behind != '0' && steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          upstream_tip=$(git rev-parse --short upstream/main)
+          title="Sync fork with upstream microsoft/typescript-go"
+          body=$(printf '%s\n' \
+            "Automated daily sync with microsoft/typescript-go main." \
+            "" \
+            "This run brought the fork forward by ${{ steps.gap.outputs.behind }} commits, up to upstream $upstream_tip." \
+            "Our shim commits stay on top. The shim built and its tests passed in this workflow before the branch was pushed." \
+            "" \
+            "Merge this to land the sync. After it lands, bump bento's typescript-go replace pin to the new main.")
+          existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')
+          if [ -z "$existing" ]; then
+            gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body "$body"
+          else
+            gh pr edit "$existing" --body "$body"
+            echo "Refreshed PR #$existing."
+          fi
