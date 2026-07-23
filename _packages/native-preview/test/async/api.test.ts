@@ -3,12 +3,14 @@ import {
     cast,
     escapeLeadingUnderscores,
     type Expression,
+    getJSDocTags,
     getSynthesizedDeepClone,
     InternalSymbolName,
     isCallExpression,
     isFunctionDeclaration,
     isIdentifier,
     isImportDeclaration,
+    isJSDocParameterTag,
     isNamedImports,
     isReturnStatement,
     isShorthandPropertyAssignment,
@@ -19,6 +21,7 @@ import {
     isTypeAliasDeclaration,
     isTypeNode,
     isVariableDeclarationList,
+    isVariableStatement,
     type Node,
     type NodeArray,
     NodeFlags,
@@ -40,9 +43,11 @@ import { visitEachChild } from "@typescript/native-preview/unstable/ast/visitor"
 import {
     API,
     type BigIntLiteralType,
+    CheckFlags,
     type ConditionalType,
     DiagnosticCategory,
     type FreshableType,
+    type ImportAdderAction,
     type IndexedAccessType,
     type IndexType,
     type InterfaceType,
@@ -52,10 +57,12 @@ import {
     ModifierFlags,
     ModuleKind,
     ObjectFlags,
+    type Signature,
     SignatureKind,
     type StringMappingType,
     SymbolFlags,
     type TemplateLiteralType,
+    type TextEdit,
     TypeFlags,
     type TypeParameter,
     TypePredicateKind,
@@ -87,6 +94,25 @@ describe("API", () => {
             const config = await api.parseConfigFile("/tsconfig.json");
             assert.deepEqual(config.fileNames, ["/src/index.ts", "/src/foo.ts"]);
             assert.deepEqual(config.options, { configFilePath: "/tsconfig.json" });
+            assert.equal(config.projectReferences, undefined);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("parseConfigFile includes projectReferences", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ references: [{ path: "./harness" }, { path: "./server" }] }),
+        });
+        try {
+            const config = await api.parseConfigFile("/tsconfig.json");
+            assert.deepEqual(config.fileNames, []);
+            assert.deepEqual(config.options, { configFilePath: "/tsconfig.json" });
+            assert.deepEqual(config.projectReferences, [
+                { circular: false, originalPath: "./harness", path: "/harness" },
+                { circular: false, originalPath: "./server", path: "/server" },
+            ]);
         }
         finally {
             await api.close();
@@ -179,6 +205,125 @@ describe("Snapshot", () => {
             const type = await project.checker.getTypeOfSymbol(symbol);
             assert.ok(type);
             assert.ok(type.flags & TypeFlags.NumberLiteral);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getImportEditsForSymbols adds a named import", async () => {
+        const source = `const value = foo;\n`;
+        const api = spawnAPI({
+            "/tsconfig.json": "{}",
+            "/src/index.ts": source,
+            "/src/foo.ts": `export const foo = 1;\n`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const symbol = await project.checker.getSymbolAtPosition("/src/foo.ts", "export const ".length);
+            assert.ok(symbol);
+
+            const edits = await project.getImportEditsForSymbols("/src/index.ts", [await symbol.getExportSymbol()]);
+
+            assert.equal(applyTextEdits(source, edits), `import { foo } from "./foo";\n\nconst value = foo;\n`);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getImportAdderEdits coalesces multiple importSymbol actions", async () => {
+        const source = `const value = foo + bar;\n`;
+        const api = spawnAPI({
+            "/tsconfig.json": "{}",
+            "/src/index.ts": source,
+            "/src/foo.ts": `export const foo = 1;\nexport const bar = 2;\n`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const foo = await project.checker.getSymbolAtPosition("/src/foo.ts", "export const ".length);
+            const bar = await project.checker.getSymbolAtPosition("/src/foo.ts", "export const foo = 1;\nexport const ".length);
+            assert.ok(foo);
+            assert.ok(bar);
+
+            const edits = await project.getImportAdderEdits("/src/index.ts", [
+                { kind: "importSymbol", symbol: await foo.getExportSymbol() },
+                { kind: "importSymbol", symbol: await bar.getExportSymbol() },
+            ]);
+
+            assert.equal(applyTextEdits(source, edits), `import { bar, foo } from "./foo";\n\nconst value = foo + bar;\n`);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getImportAdderEdits adds to an existing import", async () => {
+        const source = `import { foo } from "./foo";\nconst value = foo + bar;\n`;
+        const api = spawnAPI({
+            "/tsconfig.json": "{}",
+            "/src/index.ts": source,
+            "/src/foo.ts": `export const foo = 1;\nexport const bar = 2;\n`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const bar = await project.checker.getSymbolAtPosition("/src/foo.ts", "export const foo = 1;\nexport const ".length);
+            assert.ok(bar);
+
+            const edits = await project.getImportAdderEdits("/src/index.ts", [
+                { kind: "importSymbol", symbol: await bar.getExportSymbol() },
+            ]);
+
+            assert.equal(applyTextEdits(source, edits), `import { bar, foo } from "./foo";\nconst value = foo + bar;\n`);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getImportAdderEdits returns no edits for non-exported symbols", async () => {
+        const source = `const value = local;\n`;
+        const api = spawnAPI({
+            "/tsconfig.json": "{}",
+            "/src/index.ts": source,
+            "/src/foo.ts": `const local = 1;\n`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const symbol = await project.checker.getSymbolAtPosition("/src/foo.ts", "const ".length);
+            assert.ok(symbol);
+
+            const edits = await project.getImportAdderEdits("/src/index.ts", [
+                { kind: "importSymbol", symbol },
+            ]);
+
+            assert.deepEqual(edits, []);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getImportAdderEdits rejects invalid actions", async () => {
+        const api = spawnAPI();
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const symbol = await project.checker.getSymbolAtPosition("/src/foo.ts", 13);
+            assert.ok(symbol);
+
+            await assert.rejects( // @sync: assert.throws(
+                () => project.getImportAdderEdits("/src/index.ts", [{ kind: "unknown", symbol: symbol.id } as unknown as ImportAdderAction]),
+                /Debug Failure\. Illegal value: "unknown"/,
+            );
+            await assert.rejects( // @sync: assert.throws(
+                () => project.getImportAdderEdits("/src/index.ts", [{ kind: "importSymbol", symbol: { ...symbol, id: 999_999_999 } } as unknown as ImportAdderAction]),
+                /symbol handle \d+ not found/,
+            );
         }
         finally {
             await api.close();
@@ -1188,11 +1333,87 @@ export class Cache {
             const callSigs = await project.checker.getSignaturesOfType(type, SignatureKind.Call);
             assert.ok(callSigs.length > 0);
             const sig = callSigs[0];
+            const typeCallSigs = await type.getCallSignatures();
+            assert.deepEqual(typeCallSigs, callSigs);
+            assert.ok((await sig.getReturnType()).flags & TypeFlags.Number);
+            assert.ok((await sig.getTypeParameterAtPosition(0)).flags & TypeFlags.Number);
             assert.ok(sig.id);
             assert.ok(sig.parameters.length >= 2);
             assert.ok(sig.hasRestParameter);
             assert.ok(!sig.isConstruct);
             assert.ok(!sig.isAbstract);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getApparentProperties includes CallableFunction members", async () => {
+        const api = spawnAPI(checkerFiles);
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const src = checkerFiles["/src/main.ts"];
+            const symbol = await project.checker.getSymbolAtPosition("/src/main.ts", src.indexOf("add("));
+            assert.ok(symbol);
+            const type = await project.checker.getTypeOfSymbol(symbol);
+            const propertyNames = (await type.getApparentProperties()).map(property => property.name);
+            assert.ok(propertyNames.includes("apply"));
+            assert.ok(propertyNames.includes("call"));
+            assert.ok(propertyNames.includes("bind"));
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("checker and object methods share cached results", async () => {
+        const api = new API({
+            cwd: fileURLToPath(new URL("../../../../", import.meta.url).toString()),
+            fs: createVirtualFileSystem(checkerFiles),
+            collectTiming: true,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const src = checkerFiles["/src/main.ts"];
+            const symbol = await project.checker.getSymbolAtPosition("/src/main.ts", src.indexOf("add("));
+            assert.ok(symbol);
+            const type = await project.checker.getTypeOfSymbol(symbol);
+            let signature: Signature | undefined;
+
+            async function assertOneRequest(callback: () => Promise<void>) {
+                await api.resetTimingInfo();
+                await callback();
+                assert.equal((await api.getTimingInfo()).totals.requestCount, 1);
+            }
+
+            await assertOneRequest(async () => {
+                const properties = await type.getProperties();
+                assert.strictEqual(await project.checker.getPropertiesOfType(type), properties);
+            });
+            await assertOneRequest(async () => {
+                const signatures = await type.getCallSignatures();
+                assert.strictEqual(await project.checker.getSignaturesOfType(type, SignatureKind.Call), signatures);
+                signature = signatures[0];
+            });
+            await assertOneRequest(async () => {
+                const nonNullable = await project.checker.getNonNullableType(type);
+                assert.strictEqual(await type.getNonNullableType(), nonNullable);
+            });
+            await assertOneRequest(async () => {
+                const apparentType = await type.getApparentType();
+                assert.strictEqual(await project.checker.getApparentType(type), apparentType);
+            });
+            await assertOneRequest(async () => {
+                const indexInfos = await type.getIndexInfos();
+                assert.strictEqual(await project.checker.getIndexInfosOfType(type), indexInfos);
+            });
+            await assertOneRequest(async () => {
+                assert.ok(signature);
+                const returnType = await project.checker.getReturnTypeOfSignature(signature);
+                assert.strictEqual(await signature.getReturnType(), returnType);
+            });
         }
         finally {
             await api.close();
@@ -1237,6 +1458,10 @@ export class Cache {
             assert.ok(sig.declaration);
             const node = await sig.declaration.resolve(project);
             assert.ok(node);
+            // The handle remembers its canonical project, so resolve() works without an argument.
+            const nodeFromCanonical = await sig.declaration.resolve();
+            assert.ok(nodeFromCanonical);
+            assert.strictEqual(nodeFromCanonical.kind, node.kind);
 
             const methodPos = src.indexOf("getValue");
             const methodSymbol = await project.checker.getSymbolAtPosition("/src/main.ts", methodPos);
@@ -1246,6 +1471,10 @@ export class Cache {
             assert.ok(methodNode);
             assert.strictEqual(methodNode.parent.kind, SyntaxKind.ClassDeclaration);
             assert.strictEqual(methodNode.parent.parent.kind, SyntaxKind.SourceFile);
+            // A symbol's declaration handles default to the symbol's canonical project.
+            const methodNodeFromCanonical = await methodSymbol.valueDeclaration.resolve();
+            assert.ok(methodNodeFromCanonical);
+            assert.strictEqual(methodNodeFromCanonical.kind, methodNode.kind);
         }
         finally {
             await api.close();
@@ -1478,6 +1707,21 @@ export const value = 1;
             await api.close();
         }
     });
+
+    test("checkFlags is typed as CheckFlags", async () => {
+        const api = spawnAPI(symbolFiles);
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const symbol = await project.checker.getSymbolAtPosition("/src/mod.ts", symbolFiles["/src/mod.ts"].indexOf("Animal"));
+            assert.ok(symbol);
+            const checkFlags: CheckFlags = symbol.checkFlags;
+            assert.equal(checkFlags & CheckFlags.Readonly, 0);
+        }
+        finally {
+            await api.close();
+        }
+    });
 });
 
 describe("Type - getSymbol", () => {
@@ -1551,6 +1795,11 @@ export const tuple: readonly [number, string?, ...boolean[]] = [1];
             const target = await ref.getTarget();
             assert.ok(target);
             assert.ok(target.flags & TypeFlags.Object);
+            const properties = await type.getProperties();
+            assert.ok(properties.some(property => property.name === "length"));
+            assert.equal((await type.getProperty("length"))?.name, "length");
+            assert.ok((await type.getApparentProperties()).length >= properties.length);
+            assert.strictEqual(await type.getNonNullableType(), type);
         }
         finally {
             await api.close();
@@ -2778,6 +3027,44 @@ export type Alias = typeof value;
     });
 });
 
+describe("Checker - well-known signatures", () => {
+    test("isUnknownSignature identifies an unresolvable call", async () => {
+        const src = `
+const ok = (x: number) => x;
+ok(1);
+const notCallable = 1;
+notCallable();
+`;
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+            "/src/main.ts": src,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const sourceFile = await project.program.getSourceFile("/src/main.ts");
+            assert.ok(sourceFile);
+            const calls: Node[] = [];
+            sourceFile.forEachChild(function visit(node) {
+                if (isCallExpression(node)) calls.push(node);
+                node.forEachChild(visit);
+            });
+            assert.equal(calls.length, 2, "should find two call expressions");
+
+            // The valid call resolves to a real signature, not the unknown signature.
+            const okSig = await project.checker.getResolvedSignature(calls[0]);
+            assert.equal(await project.checker.isUnknownSignature(okSig), false);
+
+            // The call to a non-callable value yields the unknown signature.
+            const badSig = await project.checker.getResolvedSignature(calls[1]);
+            assert.equal(await project.checker.isUnknownSignature(badSig), true);
+        }
+        finally {
+            await api.close();
+        }
+    });
+});
+
 describe("Symbol - escaped names and tables", () => {
     test("getExports/getMembers return a cached Map keyed by escaped name", async () => {
         const api = spawnAPI({
@@ -2851,6 +3138,160 @@ describe("ast - escapeLeadingUnderscores", () => {
         assert.equal(unescapeLeadingUnderscores("foo" as __String), "foo");
         assert.equal(unescapeLeadingUnderscores("__type" as __String), "__type");
         assert.equal(unescapeLeadingUnderscores("___foo" as __String), "__foo");
+    });
+});
+
+describe("ast - getJSDocTags", () => {
+    test("returns a node's own tags, and inherited @param / @template tags", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+            "/src/main.ts": `
+/**
+ * Adds two numbers.
+ * @param a the first number
+ * @param b the second number
+ * @returns the sum
+ */
+export function add(a: number, b: number): number {
+    return a + b;
+}
+
+/**
+ * @template T the element type
+ * @param x a value
+ */
+export function identity<T>(x: T): T {
+    return x;
+}
+
+/** @deprecated use add */
+export const total = add(1, 2);
+`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const sourceFile = await project.program.getSourceFile("/src/main.ts");
+            assert.ok(sourceFile);
+            const functions = [...sourceFile.statements].filter(isFunctionDeclaration);
+            const add = functions[0];
+            const identity = functions[1];
+            assert.ok(add);
+            assert.ok(identity);
+
+            // A function reports its own JSDoc tags.
+            assert.deepEqual(getJSDocTags(add).map(t => t.tagName.text), ["param", "param", "returns"]);
+
+            // A parameter inherits the matching @param tag from its containing
+            // signature.
+            const paramA = add.parameters[0];
+            const paramATags = getJSDocTags(paramA);
+            assert.deepEqual(paramATags.map(t => t.tagName.text), ["param"]);
+            const paramATag = paramATags[0];
+            assert.ok(isJSDocParameterTag(paramATag));
+            assert.ok(isIdentifier(paramATag.name));
+            assert.equal(paramATag.name.text, "a");
+
+            const paramB = add.parameters[1];
+            const paramBTags = getJSDocTags(paramB);
+            assert.deepEqual(paramBTags.map(t => t.tagName.text), ["param"]);
+            const paramBTag = paramBTags[0];
+            assert.ok(isJSDocParameterTag(paramBTag));
+            assert.ok(isIdentifier(paramBTag.name));
+            assert.equal(paramBTag.name.text, "b");
+
+            // A type parameter inherits the matching @template tag.
+            const typeParam = identity.typeParameters![0];
+            assert.deepEqual(getJSDocTags(typeParam).map(t => t.tagName.text), ["template"]);
+
+            // The value parameter of `identity` inherits its @param tag.
+            const identityParam = identity.parameters[0];
+            assert.deepEqual(getJSDocTags(identityParam).map(t => t.tagName.text), ["param"]);
+
+            // A variable declaration walks up its comment-location chain
+            // (declaration -> declaration list -> statement) to the JSDoc on the
+            // containing variable statement.
+            const variable = sourceFile.statements.find(isVariableStatement);
+            assert.ok(variable);
+            const declaration = variable.declarationList.declarations[0];
+            assert.deepEqual(getJSDocTags(declaration).map(t => t.tagName.text), ["deprecated"]);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("a function-expression parameter inherits @param tags from the variable statement", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, checkJs: true } }),
+            "/src/main.js": `
+/**
+ * @param {string} name a name
+ * @returns {number} the length
+ */
+var measure = function (name) {
+    return name.length;
+};
+`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const sourceFile = await project.program.getSourceFile("/src/main.js");
+            assert.ok(sourceFile);
+            const variable = sourceFile.statements.find(isVariableStatement);
+            assert.ok(variable);
+            const declaration = variable.declarationList.declarations[0];
+            const funcExpr = declaration.initializer;
+            assert.ok(funcExpr);
+
+            // The variable statement carries the @param and @returns tags.
+            assert.deepEqual(getJSDocTags(declaration).map(t => t.tagName.text), ["param", "returns"]);
+
+            // The function expression's parameter walks declaration -> list ->
+            // statement and inherits the matching @param tag.
+            const param = (funcExpr as unknown as { parameters: NodeArray<Node>; }).parameters[0];
+            const paramTags = getJSDocTags(param);
+            assert.deepEqual(paramTags.map(t => t.tagName.text), ["param"]);
+            const paramTag = paramTags[0];
+            assert.ok(isJSDocParameterTag(paramTag));
+            assert.ok(isIdentifier(paramTag.name));
+            assert.equal(paramTag.name.text, "name");
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("a @type cast tag is owned by its parenthesized expression, not the declaration", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { allowJs: true, checkJs: true } }),
+            "/src/main.js": `
+/** @type {string} */
+const value = "hello";
+
+const cast = /** @type {number} */ (someValue);
+`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const sourceFile = await project.program.getSourceFile("/src/main.js");
+            assert.ok(sourceFile);
+            const statements = [...sourceFile.statements].filter(isVariableStatement);
+
+            // A @type tag directly on a declaration is reported for that declaration.
+            const valueDecl = statements[0].declarationList.declarations[0];
+            assert.deepEqual(getJSDocTags(valueDecl).map(t => t.tagName.text), ["type"]);
+
+            // A @type cast tag attached to a parenthesized expression is owned by
+            // that expression and is not reported for the enclosing declaration.
+            const castDecl = statements[1].declarationList.declarations[0];
+            assert.deepEqual(getJSDocTags(castDecl).map(t => t.tagName.text), []);
+        }
+        finally {
+            await api.close();
+        }
     });
 });
 
@@ -2974,6 +3415,69 @@ describe("Checker - getConstraintOfTypeParameter", () => {
             const constraint = await project.checker.getConstraintOfTypeParameter(typeParams[0]);
             assert.ok(constraint);
             assert.ok(constraint.flags & TypeFlags.String, `Expected string constraint, got flags ${constraint.flags}`);
+        }
+        finally {
+            await api.close();
+        }
+    });
+});
+
+describe("Checker - TypeParameter getters", () => {
+    test("getConstraint() and getDefault() return the constraint and default types", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+            "/src/main.ts": `export function f<T extends string = "hello">(x: T): T { return x; }`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const src = `export function f<T extends string = "hello">(x: T): T { return x; }`;
+            const pos = src.indexOf("f<");
+            const symbol = await project.checker.getSymbolAtPosition("/src/main.ts", pos);
+            assert.ok(symbol);
+            const type = await project.checker.getTypeOfSymbol(symbol);
+            assert.ok(type);
+            const sigs = await project.checker.getSignaturesOfType(type, SignatureKind.Call);
+            assert.ok(sigs.length > 0);
+            const typeParams = await sigs[0].getTypeParameters();
+            assert.ok(typeParams.length > 0, "Should have type parameters");
+            const typeParam = typeParams[0] as TypeParameter;
+
+            const constraint = await typeParam.getConstraint();
+            assert.ok(constraint);
+            assert.ok(constraint.flags & TypeFlags.String, `Expected string constraint, got flags ${constraint.flags}`);
+
+            const defaultType = await typeParam.getDefault();
+            assert.ok(defaultType);
+            assert.ok(defaultType.flags & TypeFlags.StringLiteral, `Expected string literal default, got flags ${defaultType.flags}`);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("getConstraint() and getDefault() return undefined when there is none", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+            "/src/main.ts": `export function f<T>(x: T): T { return x; }`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const src = `export function f<T>(x: T): T { return x; }`;
+            const pos = src.indexOf("f<");
+            const symbol = await project.checker.getSymbolAtPosition("/src/main.ts", pos);
+            assert.ok(symbol);
+            const type = await project.checker.getTypeOfSymbol(symbol);
+            assert.ok(type);
+            const sigs = await project.checker.getSignaturesOfType(type, SignatureKind.Call);
+            assert.ok(sigs.length > 0);
+            const typeParams = await sigs[0].getTypeParameters();
+            assert.ok(typeParams.length > 0, "Should have type parameters");
+            const typeParam = typeParams[0] as TypeParameter;
+
+            assert.equal(await typeParam.getConstraint(), undefined);
+            assert.equal(await typeParam.getDefault(), undefined);
         }
         finally {
             await api.close();
@@ -4889,6 +5393,197 @@ test("Benchmarks", async () => {
     await runBenchmarks({ singleIteration: true });
 });
 
+describe("Timing", () => {
+    test("collects combined client, server, and transport timing info", async () => {
+        const api = new API({
+            cwd: fileURLToPath(new URL("../../../../", import.meta.url).toString()),
+            fs: createVirtualFileSystem({ ...defaultFiles }),
+            collectTiming: true,
+        });
+        try {
+            // Baseline: enabled, but nothing measured yet.
+            let info = await api.getTimingInfo();
+            assert.equal(info.enabled, true);
+            assert.equal(info.totals.requestCount, 0);
+            assert.equal(info.recentRequests.length, 0);
+
+            // Exercise a JSON request and a binary source-file request.
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const sourceFile = await project.program.getSourceFile("/src/index.ts");
+            assert.ok(sourceFile);
+
+            // Client-side timing: round-trip latency and byte counts.
+            info = await api.getTimingInfo();
+            assert.ok(info.totals.requestCount >= 2, "expected at least two measured requests");
+            assert.ok(info.totals.bytesSent > 0);
+            assert.ok(info.totals.bytesReceived > 0);
+            assert.ok(info.totals.roundTripMs >= 0);
+
+            // Server-side timing is folded into the same snapshot.
+            assert.ok(info.totals.serverTimeMs >= 0);
+            assert.ok(info.totals.transportOverheadMs >= 0);
+            assert.equal(
+                info.totals.transportOverheadMs,
+                Math.max(0, info.totals.roundTripMs - info.totals.serverTimeMs),
+            );
+
+            // The ring buffer retains at most the 5 most recent requests.
+            assert.ok(info.recentRequests.length > 0);
+            assert.ok(info.recentRequests.length <= 5);
+            assert.ok(info.recentRequests.length <= info.totals.requestCount);
+
+            for (const r of info.recentRequests) {
+                assert.ok(r.roundTripMs >= 0);
+                assert.ok(r.bytesSent >= 0);
+                assert.ok(r.bytesReceived >= 0);
+                assert.ok(typeof r.method === "string" && r.method.length > 0);
+                assert.equal(typeof r.timestamp, "number");
+                // Transport overhead is present exactly when server time is.
+                assert.equal(r.transportOverheadMs === undefined, r.serverTimeMs === undefined);
+                if (r.serverTimeMs !== undefined) {
+                    assert.ok(r.serverTimeMs >= 0);
+                    assert.equal(r.transportOverheadMs, Math.max(0, r.roundTripMs - r.serverTimeMs));
+                }
+            }
+
+            // Server processing time is folded in for the recent requests.
+            assert.ok(info.recentRequests.every(r => r.serverTimeMs !== undefined), "server time should be reported");
+
+            // Reset clears totals and history on both client and server.
+            await api.resetTimingInfo();
+            info = await api.getTimingInfo();
+            assert.equal(info.enabled, true);
+            assert.equal(info.totals.requestCount, 0);
+            assert.equal(info.totals.serverTimeMs, 0);
+            assert.equal(info.totals.transportOverheadMs, 0);
+            assert.equal(info.recentRequests.length, 0);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("tracks source-file node materialization", async () => {
+        const api = new API({
+            cwd: fileURLToPath(new URL("../../../../", import.meta.url).toString()),
+            fs: createVirtualFileSystem({ ...defaultFiles }),
+            collectTiming: true,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+            const sourceFile = await project.program.getSourceFile("/src/index.ts");
+            assert.ok(sourceFile);
+
+            // The source file node itself is pre-cached, so before walking the
+            // tree no descendant nodes have been materialized.
+            let info = await api.getTimingInfo();
+            const before = info.totals.nodesMaterialized;
+            assert.equal(info.totals.sourceFilesFetched, 1, "one source file was fetched");
+            assert.ok(info.totals.nodesFetched > 0, "the fetched file contributes materializable nodes");
+            assert.equal(info.totals.nodesMaterialized, 0, "nothing walked yet, so no nodes materialized");
+
+            // Walk the whole tree to force lazy materialization of every node.
+            let visited = 0;
+            sourceFile.forEachChild(function visit(node) {
+                visited++;
+                node.forEachChild(visit);
+            });
+            assert.ok(visited > 0, "expected to visit at least one node");
+
+            info = await api.getTimingInfo();
+            assert.ok(
+                info.totals.nodesMaterialized > before,
+                "walking the tree should materialize nodes",
+            );
+            assert.ok(
+                info.totals.nodesMaterialized >= visited,
+                "every visited node should have been materialized",
+            );
+
+            // A full walk materializes (nearly) every fetched node, so the share
+            // of fetched nodes materialized should be substantial.
+            assert.equal(info.totals.sourceFilesFetched, 1);
+            assert.ok(
+                info.totals.nodesMaterialized > 0
+                    && info.totals.nodesMaterialized <= info.totals.nodesFetched,
+                "materialized nodes should be in (0, nodesFetched]",
+            );
+
+            // Reset clears materialization totals along with the rest.
+            await api.resetTimingInfo();
+            info = await api.getTimingInfo();
+            assert.equal(info.totals.nodesMaterialized, 0);
+            assert.equal(info.totals.sourceFilesFetched, 0);
+            assert.equal(info.totals.nodesFetched, 0);
+        }
+        finally {
+            await api.close();
+        }
+    });
+
+    test("is disabled by default", async () => {
+        const api = spawnAPI();
+        try {
+            await api.parseConfigFile("/tsconfig.json");
+            const info = await api.getTimingInfo();
+            assert.equal(info.enabled, false);
+            assert.equal(info.totals.requestCount, 0);
+            assert.equal(info.totals.nodesMaterialized, 0);
+            assert.equal(info.totals.sourceFilesFetched, 0);
+            assert.equal(info.totals.nodesFetched, 0);
+            assert.equal(info.recentRequests.length, 0);
+        }
+        finally {
+            await api.close();
+        }
+    });
+});
+
+describe("runWithTemporaryFileUpdate", () => {
+    test("temporary file update is visible in the callback and reverted afterward", async () => {
+        const api = spawnAPI({
+            "/tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+            "/src/index.ts": `export const x: number = 1;`,
+        });
+        try {
+            const snapshot = await api.updateSnapshot({ openProject: "/tsconfig.json" });
+            const project = snapshot.getProject("/tsconfig.json")!;
+
+            // The original content type-checks cleanly.
+            const baseDiags = await project.program.getSemanticDiagnostics("/src/index.ts");
+            assert.equal(baseDiags.length, 0);
+
+            // Keep a newer snapshot active to verify any active snapshot can be the base.
+            const latestSnapshot = await api.updateSnapshot();
+            assert.notEqual(latestSnapshot.id, snapshot.id);
+
+            // Inside the callback, the file has the temporary (erroneous) content.
+            let errorCount = -1;
+            await api.runWithTemporaryFileUpdate(snapshot, "/src/index.ts", `export const x: string = 1;`, async tempSnapshot => {
+                const tempProject = tempSnapshot.getProject("/tsconfig.json")!;
+                const diags = await tempProject.program.getSemanticDiagnostics("/src/index.ts");
+                errorCount = diags.length;
+            });
+            assert.ok(errorCount > 0, "temporary content should produce a semantic error inside the callback");
+
+            // The original snapshot is unaffected by the temporary update.
+            const afterDiags = await project.program.getSemanticDiagnostics("/src/index.ts");
+            assert.equal(afterDiags.length, 0);
+
+            // Subsequent regular updates still work and diff against the real latest snapshot.
+            const snapshot2 = await api.updateSnapshot();
+            const project2 = snapshot2.getProject("/tsconfig.json")!;
+            const diags2 = await project2.program.getSemanticDiagnostics("/src/index.ts");
+            assert.equal(diags2.length, 0);
+        }
+        finally {
+            await api.close();
+        }
+    });
+});
+
 function spawnAPI(files: Record<string, string> = { ...defaultFiles }) {
     return new API({
         cwd: fileURLToPath(new URL("../../../../", import.meta.url).toString()),
@@ -4915,4 +5610,13 @@ function rangeOf(source: string, searchString: string, occurrence: number = 0): 
         }
     }
     return { pos: index, end: index + searchString.length };
+}
+
+function applyTextEdits(source: string, edits: readonly TextEdit[]): string {
+    const sorted = [...edits].sort((a, b) => b.pos - a.pos);
+    let result = source;
+    for (const edit of sorted) {
+        result = result.slice(0, edit.pos) + edit.newText + result.slice(edit.end);
+    }
+    return result;
 }
