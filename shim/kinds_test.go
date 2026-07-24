@@ -10,6 +10,7 @@ import (
 // nodes the checker produces: the source file walks to a function declaration
 // and an identifier that carry the expected kinds.
 func TestKindConstantsMatch(t *testing.T) {
+	t.Parallel()
 	p := shim.Compile(map[string]string{
 		"/src/main.ts": "function area(r: number) { return r; }\n",
 	}, shim.Options{})
@@ -43,6 +44,7 @@ func TestKindConstantsMatch(t *testing.T) {
 // TestCastExpressionKinds proves the as-cast and angle-bracket assertion kinds
 // name the nodes the parser produces for each cast form.
 func TestCastExpressionKinds(t *testing.T) {
+	t.Parallel()
 	p := shim.Compile(map[string]string{
 		"/src/main.ts": "const a = 1 as number;\nconst b = <number>2;\n",
 	}, shim.Options{})
@@ -75,6 +77,7 @@ func TestCastExpressionKinds(t *testing.T) {
 
 // TestImportSpecifiers proves the file's import edges come back as written.
 func TestImportSpecifiers(t *testing.T) {
+	t.Parallel()
 	p := shim.Compile(map[string]string{
 		"/src/main.ts":  "import { x } from \"./other\";\nexport const y = x;\n",
 		"/src/other.ts": "export const x = 1;\n",
@@ -101,6 +104,7 @@ func TestImportSpecifiers(t *testing.T) {
 
 // TestFileNameOfNode proves a node deep in the tree reports its own file.
 func TestFileNameOfNode(t *testing.T) {
+	t.Parallel()
 	p := shim.Compile(map[string]string{
 		"/src/main.ts": "const n = 1;\n",
 	}, shim.Options{})
@@ -132,6 +136,7 @@ func TestFileNameOfNode(t *testing.T) {
 // TestClassKeywordKinds proves the this and super keyword kinds name the nodes a
 // class body carries: this inside a method and super inside a subclass method.
 func TestClassKeywordKinds(t *testing.T) {
+	t.Parallel()
 	p := shim.Compile(map[string]string{
 		"/src/main.ts": `class Base {
   x: number = 0;

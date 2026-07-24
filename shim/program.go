@@ -45,6 +45,19 @@ type Options struct {
 	// tslib helper module for downlevel emit and reports its absence. It reproduces
 	// a project built with the helper library.
 	ImportHelpers bool
+	// AllowJS, when true, sets allowJs, under which a .js, .jsx, .mjs, or .cjs root
+	// is admitted to the program and type-checked as a source file rather than
+	// dropped. Without it the checker parses a JavaScript root but never lists it
+	// among the program's source files, so a caller that hands it a .js entry gets
+	// an empty program. A caller compiling JavaScript sets this on.
+	AllowJS bool
+	// CheckJS, when true, sets checkJs, under which the checker reports type errors
+	// in the JavaScript files allowJs admitted, the same diagnostics it would in a
+	// .ts file. Left off, a .js file is still typed (its expressions resolve to
+	// types, unannotated forms widening to any) but its type errors are not
+	// reported, which is what a front end that lowers untyped JavaScript wants: the
+	// resolved types without the JavaScript-specific diagnostics gating the build.
+	CheckJS bool
 }
 
 // Program is a compiled, type-checked program with a checker held ready for
@@ -93,6 +106,16 @@ func Compile(files map[string]string, opts Options) *Program {
 	}
 	if opts.NoImplicitAny != nil {
 		co.NoImplicitAny = triFromBool(*opts.NoImplicitAny)
+	}
+	// allowJs admits a JavaScript root to the program; checkJs additionally reports
+	// its type errors. A caller compiling JavaScript sets allowJs so the .js entry
+	// is listed as a source file, and leaves checkJs off so the file is typed
+	// without its diagnostics gating the build.
+	if opts.AllowJS {
+		co.AllowJs = core.TSTrue
+	}
+	if opts.CheckJS {
+		co.CheckJs = core.TSTrue
 	}
 	if opts.AllowUnreachableCode != nil {
 		co.AllowUnreachableCode = triFromBool(*opts.AllowUnreachableCode)
