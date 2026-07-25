@@ -10,6 +10,7 @@ import (
 // needs: a Windows path with backslashes and a drive letter comes back slashed,
 // with the drive letter kept.
 func TestNormalizePathTurnsSeparatorsAround(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{`C:\Users\x\main.ts`, "C:/Users/x/main.ts"},
 		{`C:/Users/x/main.ts`, "C:/Users/x/main.ts"},
@@ -29,6 +30,7 @@ func TestNormalizePathTurnsSeparatorsAround(t *testing.T) {
 // be unchanged by normalization with the trailing separator removed, which is the
 // check vfstest.FromMap makes before it panics.
 func TestNormalizedPathsSatisfyTheFileMapPredicate(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{`C:\Users\x\main.ts`, `C:\Users\x\`, "/home/x/main.ts", "/home/x/"} {
 		p := shim.RemoveTrailingDirectorySeparator(shim.NormalizePath(in))
 		if !shim.IsRootedDiskPath(p) {
