@@ -1,0 +1,56 @@
+name: shim
+
+# Fast, fork-owned check scoped to the shim package, the only code this fork
+# adds on top of upstream. The full ci workflow still builds and tests the whole
+# module, but a shim change gets its signal here in a few minutes rather than
+# waiting on a lint and test run over all of upstream typescript-go.
+# Upstream has no file by this name, so the daily upstream merge never touches it.
+
+on:
+  pull_request:
+    paths:
+      - 'shim/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.golangci.yml'
+      - '.custom-gcl.yml'
+      - '.github/workflows/shim.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  shim:
+    name: shim (build, test, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l shim)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./shim/... ./internal/checker/...
+
+      - name: Test
+        run: go test ./shim/...
+
+      - name: Build the custom linter
+        run: |
+          version=$(grep -oE 'version: v[0-9.]+' .custom-gcl.yml | head -1 | awk '{print $2}')
+          go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${version}" custom
+
+      - name: Lint shim only
+        run: ./_tools/custom-gcl run ./shim/...
