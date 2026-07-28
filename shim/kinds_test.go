@@ -41,16 +41,16 @@ func TestKindConstantsMatch(t *testing.T) {
 	}
 }
 
-// TestCastExpressionKinds proves the as-cast and angle-bracket assertion kinds
-// name the nodes the parser produces for each cast form.
+// TestCastExpressionKinds proves the as-cast, angle-bracket assertion, and
+// non-null assertion kinds name the nodes the parser produces for each form.
 func TestCastExpressionKinds(t *testing.T) {
 	t.Parallel()
 	p := shim.Compile(map[string]string{
-		"/src/main.ts": "const a = 1 as number;\nconst b = <number>2;\n",
+		"/src/main.ts": "const a = 1 as number;\nconst b = <number>2;\nconst c: number | null = 3;\nconst d = c!;\n",
 	}, shim.Options{})
 	defer p.Close()
 
-	var sawAs, sawAssertion bool
+	var sawAs, sawAssertion, sawNonNull bool
 	var walk func(n *shim.Node) bool
 	walk = func(n *shim.Node) bool {
 		switch n.Kind {
@@ -58,6 +58,8 @@ func TestCastExpressionKinds(t *testing.T) {
 			sawAs = true
 		case shim.KindTypeAssertionExpression:
 			sawAssertion = true
+		case shim.KindNonNullExpression:
+			sawNonNull = true
 		}
 		shim.ForEachChild(n, walk)
 		return false
@@ -72,6 +74,9 @@ func TestCastExpressionKinds(t *testing.T) {
 	}
 	if !sawAssertion {
 		t.Error("did not find an angle-bracket assertion by its kind constant")
+	}
+	if !sawNonNull {
+		t.Error("did not find a non-null assertion by its kind constant")
 	}
 }
 

@@ -66,6 +66,11 @@ const (
 	KindAsExpression            = ast.KindAsExpression
 	KindTypeAssertionExpression = ast.KindTypeAssertionExpression
 
+	// The non-null assertion, x!. It belongs with the casts above: the checker
+	// strips null and undefined from the operand's type and the emitter drops the
+	// operator, so the runtime value is the operand's.
+	KindNonNullExpression = ast.KindNonNullExpression
+
 	// Literals and keyword-valued expressions, the leaves a code generator reads
 	// a constant from.
 	KindNumericLiteral                = ast.KindNumericLiteral
