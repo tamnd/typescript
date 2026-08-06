@@ -76,6 +76,7 @@ const (
 	TypeFlagsNumberLike     = checker.TypeFlagsNumberLike
 	TypeFlagsBooleanLike    = checker.TypeFlagsBooleanLike
 	TypeFlagsEnumLike       = checker.TypeFlagsEnumLike
+	TypeFlagsNonPrimitive   = checker.TypeFlagsNonPrimitive
 )
 
 // SymbolFlags values, re-exported for the same reason.
