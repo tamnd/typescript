@@ -53,12 +53,19 @@ const (
 	KindPostfixUnaryExpression   = ast.KindPostfixUnaryExpression
 	KindConditionalExpression    = ast.KindConditionalExpression
 	KindTemplateExpression       = ast.KindTemplateExpression
-	KindObjectLiteralExpression  = ast.KindObjectLiteralExpression
-	KindArrayLiteralExpression   = ast.KindArrayLiteralExpression
-	KindAwaitExpression          = ast.KindAwaitExpression
-	KindYieldExpression          = ast.KindYieldExpression
-	KindSpreadElement            = ast.KindSpreadElement
-	KindParenthesizedExpression  = ast.KindParenthesizedExpression
+
+	// The tagged template, tag`a${x}b`. It is a call, not a string: the tag is
+	// invoked with the template's literal parts and its substitution values, so a
+	// walker that reads the template expression alone sees a string where the
+	// program wrote a call. Its children are the tag and the template.
+	KindTaggedTemplateExpression = ast.KindTaggedTemplateExpression
+
+	KindObjectLiteralExpression = ast.KindObjectLiteralExpression
+	KindArrayLiteralExpression  = ast.KindArrayLiteralExpression
+	KindAwaitExpression         = ast.KindAwaitExpression
+	KindYieldExpression         = ast.KindYieldExpression
+	KindSpreadElement           = ast.KindSpreadElement
+	KindParenthesizedExpression = ast.KindParenthesizedExpression
 
 	// Type-cast expressions the emitter erases to their inner value: the `as`
 	// form and the angle-bracket assertion. Both carry a type the checker used to

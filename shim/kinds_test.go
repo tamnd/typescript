@@ -80,6 +80,69 @@ func TestCastExpressionKinds(t *testing.T) {
 	}
 }
 
+// TestTaggedTemplateKind proves the tagged template kind names the node the
+// parser produces for both spellings, the one with substitutions and the one
+// without, and that the tag and the template come back as its children. A
+// walker that only knows the template kinds reads a tagged template as the
+// string it wraps and misses the call, which is the whole point of the
+// constant.
+func TestTaggedTemplateKind(t *testing.T) {
+	t.Parallel()
+	p := shim.Compile(map[string]string{
+		"/src/main.ts": `function tag(parts: TemplateStringsArray, ...vals: unknown[]): string {
+  return parts.join("") + vals.length;
+}
+const x = 1;
+const a = tag` + "`p${x}q`" + `;
+const b = tag` + "`plain`" + `;
+`,
+	}, shim.Options{})
+	defer p.Close()
+
+	var tagged []*shim.Node
+	var walk func(n *shim.Node) bool
+	walk = func(n *shim.Node) bool {
+		if n.Kind == shim.KindTaggedTemplateExpression {
+			tagged = append(tagged, n)
+		}
+		shim.ForEachChild(n, walk)
+		return false
+	}
+	for _, f := range p.SourceFiles() {
+		if f.FileName() == "/src/main.ts" {
+			walk(f.AsNode())
+		}
+	}
+	if len(tagged) != 2 {
+		t.Fatalf("found %d tagged templates by their kind constant, want 2", len(tagged))
+	}
+
+	var kinds [][]int32
+	for _, n := range tagged {
+		var got []int32
+		shim.ForEachChild(n, func(c *shim.Node) bool {
+			got = append(got, int32(c.Kind))
+			return false
+		})
+		kinds = append(kinds, got)
+	}
+	want := [][]int32{
+		{int32(shim.KindIdentifier), int32(shim.KindTemplateExpression)},
+		{int32(shim.KindIdentifier), int32(shim.KindNoSubstitutionTemplateLiteral)},
+	}
+	for i, w := range want {
+		if len(kinds[i]) != len(w) {
+			t.Errorf("tagged template %d has children %v, want %v", i, kinds[i], w)
+			continue
+		}
+		for j := range w {
+			if kinds[i][j] != w[j] {
+				t.Errorf("tagged template %d child %d kind = %d, want %d", i, j, kinds[i][j], w[j])
+			}
+		}
+	}
+}
+
 // TestImportSpecifiers proves the file's import edges come back as written.
 func TestImportSpecifiers(t *testing.T) {
 	t.Parallel()
